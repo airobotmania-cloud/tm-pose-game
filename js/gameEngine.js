@@ -1,73 +1,59 @@
 /**
  * gameEngine.js
- * 게임 단계, 명령, 점수, 제한시간 등 게임 규칙 전체를 담당
- *
- * 포즈 인식을 활용한 게임 로직을 관리하는 엔진
- * (현재는 기본 템플릿이므로 향후 게임 로직 추가 가능)
+ * "Fruit Catcher" Game Logic
+ * Updated for 600x600 Resolution
  */
 
 class GameEngine {
   constructor() {
     this.score = 0;
     this.level = 1;
-    this.timeLimit = 0;
-    this.currentCommand = null;
+    this.timeLimit = 60;
     this.isGameActive = false;
-    this.gameTimer = null;
-    this.onCommandChange = null; // 명령 변경 콜백
-    this.onScoreChange = null; // 점수 변경 콜백
-    this.onGameEnd = null; // 게임 종료 콜백
+
+    // Game Objects
+    this.items = []; // { x, y, type, speed, icon }
+    this.basketPosition = "CENTER"; // LEFT, CENTER, RIGHT
+    this.spawnTimer = 0;
+    this.spawnInterval = 60; // Frames between spawns
+
+    // Constants (Updated for 600px width)
+    this.ZONES = {
+      LEFT: 100,    // 1/6 width
+      CENTER: 300,  // 3/6 width
+      RIGHT: 500    // 5/6 width
+    };
+    this.ITEM_TYPES = [
+      { type: "APPLE", score: 100, icon: "🍎", chance: 0.7 },
+      { type: "BOMB", score: 0, icon: "💣", chance: 0.3 }
+    ];
+
+    // Callbacks
+    this.onGameEnd = null;
   }
 
-  /**
-   * 게임 시작
-   * @param {Object} config - 게임 설정 { timeLimit, commands }
-   */
   start(config = {}) {
     this.isGameActive = true;
     this.score = 0;
     this.level = 1;
-    this.timeLimit = config.timeLimit || 60; // 기본 60초
-    this.commands = config.commands || []; // 게임 명령어 배열
+    this.timeLimit = config.timeLimit || 60;
+    this.items = [];
+    this.basketPosition = "CENTER";
+    this.spawnTimer = 0;
 
-    if (this.timeLimit > 0) {
-      this.startTimer();
-    }
-
-    // 첫 번째 명령 발급 (게임 모드일 경우)
-    if (this.commands.length > 0) {
-      this.issueNewCommand();
-    }
-  }
-
-  /**
-   * 게임 중지
-   */
-  stop() {
-    this.isGameActive = false;
+    // Start Timer
     this.clearTimer();
-
-    if (this.onGameEnd) {
-      this.onGameEnd(this.score, this.level);
-    }
-  }
-
-  /**
-   * 타이머 시작
-   */
-  startTimer() {
     this.gameTimer = setInterval(() => {
       this.timeLimit--;
-
-      if (this.timeLimit <= 0) {
-        this.stop();
-      }
+      if (this.timeLimit <= 0) this.gameOver();
     }, 1000);
   }
 
-  /**
-   * 타이머 정리
-   */
+  stop() {
+    this.isGameActive = false;
+    this.clearTimer();
+  }
+
   clearTimer() {
     if (this.gameTimer) {
       clearInterval(this.gameTimer);
@@ -75,88 +61,124 @@ class GameEngine {
     }
   }
 
-  /**
-   * 새로운 명령 발급
-   */
-  issueNewCommand() {
-    if (this.commands.length === 0) return;
-
-    const randomIndex = Math.floor(Math.random() * this.commands.length);
-    this.currentCommand = this.commands[randomIndex];
-
-    if (this.onCommandChange) {
-      this.onCommandChange(this.currentCommand);
+  gameOver() {
+    this.stop();
+    if (this.onGameEnd) {
+      this.onGameEnd(this.score, this.level);
+    } else {
+      alert(`Game Over! Score: ${this.score}`);
     }
   }
 
-  /**
-   * 포즈 인식 결과 처리
-   * @param {string} detectedPose - 인식된 포즈 이름
-   */
-  onPoseDetected(detectedPose) {
+  // Called every frame
+  update() {
     if (!this.isGameActive) return;
 
-    // 현재 명령과 일치하는지 확인
-    if (this.currentCommand && detectedPose === this.currentCommand) {
-      this.addScore(10); // 점수 추가
-      this.issueNewCommand(); // 새로운 명령 발급
+    // 1. Spawn Items
+    this.spawnTimer++;
+    // Level up speed (decrease interval)
+    // Level 1: 60 frames (1 sec), Level 10: 20 frames (0.3 sec)
+    const currentInterval = Math.max(20, 60 - (this.level * 4));
+
+    if (this.spawnTimer >= currentInterval) {
+      this.spawnItem();
+      this.spawnTimer = 0;
+    }
+
+    // 2. Move Items & Collision
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      let item = this.items[i];
+      // Fall speed increases with level
+      item.y += item.speed + (this.level * 0.5);
+
+      // Check Collision with Basket (Basket Y is approx 500-550)
+      if (item.y > 500 && item.y < 550) {
+        // Check X Zone
+        if (Math.abs(item.x - this.ZONES[this.basketPosition]) < 50) {
+          this.handleCollision(item);
+          this.items.splice(i, 1);
+          continue;
+        }
+      }
+
+      // Remove if off screen (Height 600)
+      if (item.y > 650) {
+        this.items.splice(i, 1);
+      }
     }
   }
 
-  /**
-   * 점수 추가
-   * @param {number} points - 추가할 점수
-   */
-  addScore(points) {
-    this.score += points;
+  spawnItem() {
+    const keys = Object.keys(this.ZONES);
+    const randomZone = keys[Math.floor(Math.random() * keys.length)];
+    const x = this.ZONES[randomZone];
 
-    // 레벨업 로직 (예: 100점마다)
-    if (this.score >= this.level * 100) {
-      this.level++;
+    const rand = Math.random();
+    const typeObj = rand < 0.7 ? this.ITEM_TYPES[0] : this.ITEM_TYPES[1]; // 70% Apple
+
+    this.items.push({
+      x: x,
+      y: -50, // Start slightly above screen
+      type: typeObj.type,
+      icon: typeObj.icon,
+      score: typeObj.score,
+      speed: 3
+    });
+  }
+
+  handleCollision(item) {
+    if (item.type === "BOMB") {
+      this.gameOver();
+    } else {
+      this.score += item.score;
+      // Level up every 1000 points
+      this.level = 1 + Math.floor(this.score / 1000);
+    }
+  }
+
+  // Handle Pose Input
+  onPoseDetected(poseLabel) {
+    // Normalize label (user might have 'center', 'Right', etc.)
+    const label = (poseLabel || "").toUpperCase();
+
+    if (label.includes("LEFT")) this.basketPosition = "LEFT";
+    else if (label.includes("RIGHT")) this.basketPosition = "RIGHT";
+    else if (label.includes("CENTER")) this.basketPosition = "CENTER";
+  }
+
+  // Draw Game
+  render(ctx) {
+    if (!this.isGameActive) return;
+
+    // Use larger fonts for 600px screen
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    // 1. Draw Basket
+    const basketX = this.ZONES[this.basketPosition];
+    const basketY = 530;
+
+    ctx.font = "60px Arial"; // Basket Icon Size
+    ctx.fillText("🧺", basketX, basketY);
+
+    // 2. Draw Items
+    ctx.font = "50px Arial"; // Item Icon Size
+    for (let item of this.items) {
+      ctx.fillText(item.icon, item.x, item.y);
     }
 
-    if (this.onScoreChange) {
-      this.onScoreChange(this.score, this.level);
-    }
-  }
+    // 3. Draw HUD
+    ctx.fillStyle = "white"; // White text background for visibility
+    ctx.fillRect(0, 0, 150, 80);
 
-  /**
-   * 명령 변경 콜백 등록
-   * @param {Function} callback - (command) => void
-   */
-  setCommandChangeCallback(callback) {
-    this.onCommandChange = callback;
-  }
-
-  /**
-   * 점수 변경 콜백 등록
-   * @param {Function} callback - (score, level) => void
-   */
-  setScoreChangeCallback(callback) {
-    this.onScoreChange = callback;
-  }
-
-  /**
-   * 게임 종료 콜백 등록
-   * @param {Function} callback - (finalScore, finalLevel) => void
-   */
-  setGameEndCallback(callback) {
-    this.onGameEnd = callback;
-  }
-
-  /**
-   * 현재 게임 상태 반환
-   */
-  getGameState() {
-    return {
-      isActive: this.isGameActive,
-      score: this.score,
-      level: this.level,
-      timeRemaining: this.timeLimit,
-      currentCommand: this.currentCommand
-    };
+    ctx.fillStyle = "black";
+    ctx.font = "20px Arial";
+    ctx.textAlign = "left";
+    ctx.fillText(`Score: ${this.score}`, 10, 25);
+    ctx.fillText(`Time: ${this.timeLimit}`, 10, 50);
+    ctx.fillText(`Level: ${this.level}`, 10, 75);
   }
 }
 
-// 전역으로 내보내기
+// Export
 window.GameEngine = GameEngine;

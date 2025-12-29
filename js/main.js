@@ -1,15 +1,15 @@
 /**
  * main.js
  * 포즈 인식과 게임 로직을 초기화하고 서로 연결하는 진입점
- *
- * PoseEngine, GameEngine, Stabilizer를 조합하여 애플리케이션을 구동
+ * Updated for Dual Canvas (Game vs Webcam)
  */
 
 // 전역 변수
 let poseEngine;
 let gameEngine;
 let stabilizer;
-let ctx;
+let gameCtx; // 게임 화면 Context
+let webcamCtx; // 웹캠 화면 Context
 let labelContainer;
 
 /**
@@ -22,31 +22,36 @@ async function init() {
   startBtn.disabled = true;
 
   try {
-    // 1. PoseEngine 초기화
+    // 1. Canvas 설정 (게임용 & 웹캠용 분리)
+    const gameCanvas = document.getElementById("game-canvas");
+    gameCanvas.width = 600;
+    gameCanvas.height = 600;
+    gameCtx = gameCanvas.getContext("2d");
+
+    const webcamCanvas = document.getElementById("webcam-canvas");
+    webcamCanvas.width = 200;
+    webcamCanvas.height = 200;
+    webcamCtx = webcamCanvas.getContext("2d");
+
+    // 2. PoseEngine 초기화 (웹캠은 작게 유지)
     poseEngine = new PoseEngine("./my_model/");
     const { maxPredictions, webcam } = await poseEngine.init({
-      size: 200,
+      size: 200, // 웹캠은 200px로 충분
       flip: true
     });
 
-    // 2. Stabilizer 초기화
+    // 3. Stabilizer 초기화
     stabilizer = new PredictionStabilizer({
       threshold: 0.7,
       smoothingFrames: 3
     });
 
-    // 3. GameEngine 초기화 (선택적)
+    // 4. GameEngine 초기화
     gameEngine = new GameEngine();
-
-    // 4. 캔버스 설정
-    const canvas = document.getElementById("canvas");
-    canvas.width = 200;
-    canvas.height = 200;
-    ctx = canvas.getContext("2d");
 
     // 5. Label Container 설정
     labelContainer = document.getElementById("label-container");
-    labelContainer.innerHTML = ""; // 초기화
+    labelContainer.innerHTML = "";
     for (let i = 0; i < maxPredictions; i++) {
       labelContainer.appendChild(document.createElement("div"));
     }
@@ -57,6 +62,9 @@ async function init() {
 
     // 7. PoseEngine 시작
     poseEngine.start();
+
+    // 8. 게임 시작 (바로 시작)
+    gameEngine.start({ timeLimit: 60 });
 
     stopBtn.disabled = false;
   } catch (error) {
@@ -91,8 +99,6 @@ function stop() {
 
 /**
  * 예측 결과 처리 콜백
- * @param {Array} predictions - TM 모델의 예측 결과
- * @param {Object} pose - PoseNet 포즈 데이터
  */
 function handlePrediction(predictions, pose) {
   // 1. Stabilizer로 예측 안정화
@@ -109,7 +115,7 @@ function handlePrediction(predictions, pose) {
   const maxPredictionDiv = document.getElementById("max-prediction");
   maxPredictionDiv.innerHTML = stabilized.className || "감지 중...";
 
-  // 4. GameEngine에 포즈 전달 (게임 모드일 경우)
+  // 4. GameEngine에 포즈 전달
   if (gameEngine && gameEngine.isGameActive && stabilized.className) {
     gameEngine.onPoseDetected(stabilized.className);
   }
@@ -120,39 +126,27 @@ function handlePrediction(predictions, pose) {
  * @param {Object} pose - PoseNet 포즈 데이터
  */
 function drawPose(pose) {
+  // 1. 웹캠 화면 그리기 (오른쪽 작은 화면)
   if (poseEngine.webcam && poseEngine.webcam.canvas) {
-    ctx.drawImage(poseEngine.webcam.canvas, 0, 0);
+    webcamCtx.drawImage(poseEngine.webcam.canvas, 0, 0);
 
-    // 키포인트와 스켈레톤 그리기
     if (pose) {
       const minPartConfidence = 0.5;
-      tmPose.drawKeypoints(pose.keypoints, minPartConfidence, ctx);
-      tmPose.drawSkeleton(pose.keypoints, minPartConfidence, ctx);
+      tmPose.drawKeypoints(pose.keypoints, minPartConfidence, webcamCtx);
+      tmPose.drawSkeleton(pose.keypoints, minPartConfidence, webcamCtx);
     }
   }
-}
 
-// 게임 모드 시작 함수 (선택적 - 향후 확장용)
-function startGameMode(config) {
-  if (!gameEngine) {
-    console.warn("GameEngine이 초기화되지 않았습니다.");
-    return;
+  // 2. 게임 화면 그리기와 업데이트 (왼쪽 큰 화면)
+  if (gameEngine && gameEngine.isGameActive) {
+    // 배경 지우기 (흰색)
+    gameCtx.fillStyle = "#F0F8FF"; // AliceBlue Background
+    gameCtx.fillRect(0, 0, 600, 600);
+
+    // 게임 렌더링
+    gameEngine.update();
+    gameEngine.render(gameCtx);
   }
-
-  gameEngine.setCommandChangeCallback((command) => {
-    console.log("새로운 명령:", command);
-    // UI 업데이트 로직 추가 가능
-  });
-
-  gameEngine.setScoreChangeCallback((score, level) => {
-    console.log(`점수: ${score}, 레벨: ${level}`);
-    // UI 업데이트 로직 추가 가능
-  });
-
-  gameEngine.setGameEndCallback((finalScore, finalLevel) => {
-    console.log(`게임 종료! 최종 점수: ${finalScore}, 최종 레벨: ${finalLevel}`);
-    alert(`게임 종료!\n최종 점수: ${finalScore}\n최종 레벨: ${finalLevel}`);
-  });
-
-  gameEngine.start(config);
 }
+
+// startGameMode 함수는 이제 직접 호출되지 않으므로 제거하거나 남겨둠
